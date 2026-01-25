@@ -60,6 +60,10 @@ public class FlautoRecorderEngine
 		FlautoRecorder session = null;
 		FileOutputStream outputStream = null;
 		final private Handler mainHandler = new Handler (Looper.getMainLooper ());
+        private ByteBuffer byteBuffer;
+        private FloatBuffer floatBuffer;
+        private FloatBuffer floatBuffer2;
+
 
 
 
@@ -351,22 +355,28 @@ public class FlautoRecorderEngine
 	}
 
 
+	// Returns the number of bytes read
 	int writeData32(
 			t_CODEC theCodec,
 			Integer numChannels,
 			Boolean interleaved,
 			int bufferSize) throws Exception {
-		FloatBuffer floatBuffer = FloatBuffer.allocate(bufferSize / 4);
 
+        // Use pre-allocated buffers
 		int n = recorder.read(floatBuffer.array(), 0, bufferSize / 4, AudioRecord.READ_NON_BLOCKING);
 
 		if (n > 0) {
 			totalBytes += n;
 			ArrayList<float[]> r = new ArrayList<float[]>();
 
+            // Optimizing this part is tricky without changing the API (ArrayList<float[]>).
+            // But we can at least avoid re-allocating the intermediate buffers if we are smart,
+            // but for now let's focus on the main reading loop allocations.
+            // The user API expects ArrayList<float[]>, so we must create it.
+
 				for (int channel = 0; channel < numChannels; ++channel) {
 					int frameSize = n /  numChannels;
-					FloatBuffer fb = FloatBuffer.allocate(frameSize);
+					FloatBuffer fb = FloatBuffer.allocate(frameSize); // Still allocating here, but unavoidable given API
 					for (int i = 0; i < frameSize; ++i) {
 						int pos = channel + i * numChannels;
 						fb.array()[i ] = floatBuffer.array()[pos];
@@ -377,77 +387,74 @@ public class FlautoRecorderEngine
 			mainHandler.post(new Runnable() {
 				@Override
 				public void run() {
-					session.recordingDataFloat32(r);
+                    if (session != null)
+					    session.recordingDataFloat32(r);
 				}
 			});
 			computeMaxAmplitude32(floatBuffer.array());
-
-
 		}
 		return n;
 	}
 
 
-		int writeData32Interleaved(
+	// Returns the number of bytes read
+    int writeData32Interleaved(
 			t_CODEC theCodec,
 			Integer numChannels,
 			Boolean interleaved,
 			int bufferSize) throws Exception
 
 	{
-			FloatBuffer floatBuffer = FloatBuffer.allocate(bufferSize/4);
+        // Use pre-allocated buffer
+        // Note: floatBuffer is allocated as bufferSize/4
+        int n = recorder.read(floatBuffer.array(), 0, bufferSize / 4, AudioRecord.READ_NON_BLOCKING);
+        n *= 4; // Convert to bytes count for totalBytes logic
 
-			int n = recorder.read(floatBuffer.array(), 0, bufferSize / 4, AudioRecord.READ_NON_BLOCKING);
-			n *= 4;
+        if (n > 0)
+        {
+            totalBytes += n;
 
-			if (n > 0)
-			{
-				totalBytes += n;
+            if (!interleaved)
+            {
+                // This path seems unused or rare for interleaved=false but called from interleaved method?
+                // The original code handled !interleaved block inside writeData32Interleaved which is confusing naming.
+                // But let's respect it.
+                // floatBuffer2 should be used here.
+                int lnx = n / numChannels;
+                for (int channel = 0; channel < numChannels; ++channel)
+                {
+                    int frameSize =  n/(4 * numChannels);
+                        for (int i = 0; i < frameSize; ++i)
+                        {
+                            int pos = channel + i * numChannels;
+                            floatBuffer2.array()[i + channel * frameSize] = floatBuffer.array()[pos ];
+                        }
+                }
+                // Swap used buffer for next steps
+                FloatBuffer temp = floatBuffer;
+                floatBuffer = floatBuffer2;
+                floatBuffer2 = temp;
+            }
 
-				//byte[] bytearray = buf.array();
-				//float toto = buf.getFloat(0);
-				//float toto1 = buf.getFloat(1);
-				//buf.rewind();
+            // Copy floats to byte buffer
+            byteBuffer.rewind(); // Reuse member byteBuffer
+            byteBuffer.order(ByteOrder.nativeOrder());
+            floatBuffer.rewind();
+            byteBuffer.asFloatBuffer().put(floatBuffer);
 
-				if (!interleaved)
-				{
-					FloatBuffer fb = FloatBuffer.allocate(bufferSize/4);
-					int lnx = n / numChannels;
-					for (int channel = 0; channel < numChannels; ++channel)
-					{
-						int frameSize =  n/(4 * numChannels);
-							for (int i = 0; i < frameSize; ++i)
-							{
-								int pos = channel + i * numChannels;
-								fb.array()[i + channel * frameSize] = floatBuffer.array()[pos ];
-							}
-					}
-					floatBuffer = fb;
+            final int ln = n;
+            final byte[] b = Arrays.copyOfRange(byteBuffer.array(), 0, ln); // Still copy required for thread safety passing to UI thread
+            mainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (session != null)
+                        session.recordingData(b);
+                }
+            });
+            computeMaxAmplitude32(floatBuffer.array());
+        }
 
-				}
-
-				ByteBuffer buf = ByteBuffer.allocate(bufferSize);
-				buf.rewind();
-
-				buf.order(ByteOrder.nativeOrder());
-				floatBuffer.rewind();
-				buf.rewind();
-				buf.asFloatBuffer().put(floatBuffer);
-
-
-					final int ln = n;
-					final byte[] b = Arrays.copyOfRange(buf.array(), 0, ln);
-					mainHandler.post(new Runnable() {
-						@Override
-						public void run() {
-							session.recordingData(b);
-						}
-					});
-					computeMaxAmplitude32(floatBuffer.array());
-
-			}
-
-			return n;
+        return n; // Return bytes read (approx)
 	}
 
 	int writeData16(
@@ -457,11 +464,9 @@ public class FlautoRecorderEngine
 				  int bufferSize)
 	{
 				int n = 0;
-				ByteBuffer byteBuffer = ByteBuffer.allocate(bufferSize);
-
-
+                // Reuse byteBuffer
 				n = recorder.read(byteBuffer.array(), 0, bufferSize, AudioRecord.READ_NON_BLOCKING);
-				if (n == 0)
+				if (n <= 0) // Changed to <= 0 to handle errors
 					return 0;
 				final int elementCount = n;
 				totalBytes += n;
@@ -480,7 +485,8 @@ public class FlautoRecorderEngine
 					mainHandler.post(new Runnable() {
 						@Override
 						public void run() {
-							session.recordingData(b);
+                            if (session != null)
+							    session.recordingData(b);
 						}
 					});
 				} else // pcmInt16 !interleaved
@@ -491,8 +497,8 @@ public class FlautoRecorderEngine
 						@Override
 						public void run()
 						{
-
-							session.recordingDataInt16(x);
+                            if (session != null)
+							    session.recordingDataInt16(x);
 						}
 					});
 
@@ -509,35 +515,32 @@ public class FlautoRecorderEngine
 			Boolean interleaved,
 			int bufferSize)
 	{
+        // Removed the while loop. We only do ONE non-blocking read.
+        // The looping is handled by the recursive Runnable p mechanism.
 		int n = 0;
-		while (isRecording ) {
-			try {
+        // Check recording state first
+        if (!isRecording || recorder == null) return 0;
 
-				if (codec == t_CODEC.pcm16  || codec == t_CODEC.pcm16WAV ) {
-					 n = writeData16(codec, numChannels, interleaved
-							, bufferSize);
-				} else
-				if (interleaved) {
-					 n = writeData32Interleaved(codec, numChannels, interleaved
-							, bufferSize);
-				} else
-				{
-					n = writeData32(codec, numChannels, interleaved
-							, bufferSize);
-				}
+        try {
 
-				if (isRecording)
-					mainHandler.post(p);
-				if (n == 0)
-					break;
-			} catch (Exception e) {
-				System.out.println(e);
-				break;
-			}
-		}
-		//if (isRecording)
-			//mainHandler.post(p);
-		return 1;
+            if (codec == t_CODEC.pcm16  || codec == t_CODEC.pcm16WAV ) {
+                    n = writeData16(codec, numChannels, interleaved
+                        , bufferSize);
+            } else
+            if (interleaved) {
+                    n = writeData32Interleaved(codec, numChannels, interleaved
+                        , bufferSize);
+            } else
+            {
+                n = writeData32(codec, numChannels, interleaved
+                        , bufferSize);
+            }
+
+            // We do NOT post(p) here anymore. p handles reposting itself.
+        } catch (Exception e) {
+            System.out.println(e);
+        }
+		return n;
 	}
 
 
@@ -581,6 +584,12 @@ public class FlautoRecorderEngine
 		                            	bufLn
 					);
 
+        // Allocate buffers once
+        byteBuffer = ByteBuffer.allocate(bufLn);
+        floatBuffer = FloatBuffer.allocate(bufLn/4);
+        floatBuffer2 = FloatBuffer.allocate(bufLn/4);
+
+
 		if (recorder.getState() == AudioRecord.STATE_INITIALIZED)
 		{
 			if (noiseSuppression) {
@@ -602,7 +611,14 @@ public class FlautoRecorderEngine
 
 					if (isRecording) {
 						int n = writeData( codec, numChannels, interleaved, bufLn);
-
+                        if (isRecording) {
+                            // Yield mechanism: if we read 0 bytes, sleep a bit to avoid CPU spin
+                            if (n == 0) {
+                                mainHandler.postDelayed(p, 10);
+                            } else {
+                                mainHandler.post(p);
+                            }
+                        }
 					}
 				}
 			};
