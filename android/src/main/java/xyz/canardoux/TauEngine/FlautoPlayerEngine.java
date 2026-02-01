@@ -116,6 +116,8 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 		}
 
 		public void run() {
+			AudioTrack track = audioTrack;
+			if (track == null) return;
 			int ln = 0; // The number of bytes accepted (and perhaps played) by the device
 			if (mCodec == Flauto.t_CODEC.pcmFloat32)
 			{
@@ -124,11 +126,11 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 				FloatBuffer fbuf = buf.asFloatBuffer();
 				float[] ff = new float[mData.length/4];
 				fbuf.get(ff);
-				ln = audioTrack.write(ff, 0, mData.length/4, AudioTrack.WRITE_BLOCKING);
+				ln = track.write(ff, 0, mData.length/4, AudioTrack.WRITE_BLOCKING);
 				ln = 4 * ln;
 			} else
 			{
-				ln = audioTrack.write(mData, 0, mData.length, AudioTrack.WRITE_BLOCKING);
+				ln = track.write(mData, 0, mData.length, AudioTrack.WRITE_BLOCKING);
 			}
 			mSession.needSomeFood(1);
 		}
@@ -142,6 +144,8 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 		}
 
 		public void run() {
+			AudioTrack track = audioTrack;
+			if (track == null) return;
 			int nbrChannels = mData.size();
 			int frameSize = mData.get(0).length;
 			int ln = nbrChannels * frameSize;
@@ -158,7 +162,7 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 				}
 
 			}
-			int	r = audioTrack.write(interleavedData, 0, ln, AudioTrack.WRITE_BLOCKING);
+			int	r = track.write(interleavedData, 0, ln, AudioTrack.WRITE_BLOCKING);
 			mSession.needSomeFood(1);
 		}
 	}
@@ -171,6 +175,8 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 		}
 
 		public void run() {
+			AudioTrack track = audioTrack;
+			if (track == null) return;
 			int ln = 0; // The number of bytes accepted (and perhaps played) by the device
 			int nbrOfChannels = mData.size();
 			int frameSize = mData.get(0).length;
@@ -183,7 +189,7 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 					r[ i * nbrOfChannels + channel] = b[i];
 				}
 			}
-			ln = audioTrack.write(r, 0, r.length, AudioTrack.WRITE_BLOCKING);
+			ln = track.write(r, 0, r.length, AudioTrack.WRITE_BLOCKING);
 			mSession.needSomeFood(1);
 		}
 	}
