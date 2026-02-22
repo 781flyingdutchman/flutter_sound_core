@@ -539,11 +539,21 @@ public class FlautoPlayer implements MediaPlayer.OnErrorListener {
 	}
 
 	void logDebug(String msg) {
-		m_callBack.log(t_LOG_LEVEL.DBG, msg);
+		mainHandler.post(new Runnable() {
+			@Override
+			public void run() {
+				m_callBack.log(t_LOG_LEVEL.DBG, msg);
+			}
+		});
 	}
 
 	void logError(String msg) {
-		m_callBack.log(t_LOG_LEVEL.ERROR, msg);
+		mainHandler.post(new Runnable() {
+			@Override
+			public void run() {
+				m_callBack.log(t_LOG_LEVEL.ERROR, msg);
+			}
+		});
 	}
 
 }
