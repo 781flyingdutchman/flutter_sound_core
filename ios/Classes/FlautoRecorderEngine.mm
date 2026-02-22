@@ -81,6 +81,7 @@
          [inputNode installTapOnBus: 0 bufferSize: (int)bufferSize format: nil block:
          ^(AVAudioPCMBuffer* _Nonnull buffer, AVAudioTime* _Nonnull when)
          {
+             @autoreleasepool {
                          inputStatus = AVAudioConverterInputStatus_HaveData ;
                          AVAudioPCMBuffer* convertedBuffer = [[AVAudioPCMBuffer alloc]initWithPCMFormat: recordingFormat frameCapacity: [buffer frameCapacity]];
                                                   
@@ -176,6 +177,7 @@
                                      });
                               } // Not interleaved
                          } // (frameLength > 0)
+             }
          }];
      
 }
