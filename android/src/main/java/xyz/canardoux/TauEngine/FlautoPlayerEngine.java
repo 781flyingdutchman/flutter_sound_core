@@ -116,23 +116,27 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 		}
 
 		public void run() {
-			AudioTrack track = audioTrack;
-			if (track == null) return;
-			int ln = 0; // The number of bytes accepted (and perhaps played) by the device
-			if (mCodec == Flauto.t_CODEC.pcmFloat32)
-			{
-				ByteBuffer buf = ByteBuffer.wrap(mData);
-				buf.order(ByteOrder.nativeOrder());
-				FloatBuffer fbuf = buf.asFloatBuffer();
-				float[] ff = new float[mData.length/4];
-				fbuf.get(ff);
-				ln = track.write(ff, 0, mData.length/4, AudioTrack.WRITE_BLOCKING);
-				ln = 4 * ln;
-			} else
-			{
-				ln = track.write(mData, 0, mData.length, AudioTrack.WRITE_BLOCKING);
+			try {
+				AudioTrack track = audioTrack;
+				if (track == null) return;
+				int ln = 0; // The number of bytes accepted (and perhaps played) by the device
+				if (mCodec == Flauto.t_CODEC.pcmFloat32)
+				{
+					ByteBuffer buf = ByteBuffer.wrap(mData);
+					buf.order(ByteOrder.nativeOrder());
+					FloatBuffer fbuf = buf.asFloatBuffer();
+					float[] ff = new float[mData.length/4];
+					fbuf.get(ff);
+					ln = track.write(ff, 0, mData.length/4, AudioTrack.WRITE_BLOCKING);
+					ln = 4 * ln;
+				} else
+				{
+					ln = track.write(mData, 0, mData.length, AudioTrack.WRITE_BLOCKING);
+				}
+				mSession.needSomeFood(1);
+			} catch (Exception e) {
+				mSession.logError("FeedThread exception: " + e.getMessage());
 			}
-			mSession.needSomeFood(1);
 		}
 	}
 
@@ -144,26 +148,30 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 		}
 
 		public void run() {
-			AudioTrack track = audioTrack;
-			if (track == null) return;
-			int nbrChannels = mData.size();
-			int frameSize = mData.get(0).length;
-			int ln = nbrChannels * frameSize;
-			byte[] interleavedData = new byte[ln];
-			for (int channel = 0; channel < nbrChannels; ++channel )
-			{
-				byte[] b = mData.get(channel);
-				if (b.length != frameSize) // Wrong size
-					return;
-				for (int i = 0; i < frameSize/2; ++i) {
-					int pos = 2 * (channel + i * nbrChannels);
-					interleavedData[pos] = b[2 * i]; // Little endian
-					interleavedData[pos + 1] = b[2 * i + 1];
-				}
+			try {
+				AudioTrack track = audioTrack;
+				if (track == null) return;
+				int nbrChannels = mData.size();
+				int frameSize = mData.get(0).length;
+				int ln = nbrChannels * frameSize;
+				byte[] interleavedData = new byte[ln];
+				for (int channel = 0; channel < nbrChannels; ++channel )
+				{
+					byte[] b = mData.get(channel);
+					if (b.length != frameSize) // Wrong size
+						return;
+					for (int i = 0; i < frameSize/2; ++i) {
+						int pos = 2 * (channel + i * nbrChannels);
+						interleavedData[pos] = b[2 * i]; // Little endian
+						interleavedData[pos + 1] = b[2 * i + 1];
+					}
 
+				}
+				int	r = track.write(interleavedData, 0, ln, AudioTrack.WRITE_BLOCKING);
+				mSession.needSomeFood(1);
+			} catch (Exception e) {
+				mSession.logError("FeedInt16Thread exception: " + e.getMessage());
 			}
-			int	r = track.write(interleavedData, 0, ln, AudioTrack.WRITE_BLOCKING);
-			mSession.needSomeFood(1);
 		}
 	}
 
@@ -175,22 +183,26 @@ class FlautoPlayerEngine extends FlautoPlayerEngineInterface {
 		}
 
 		public void run() {
-			AudioTrack track = audioTrack;
-			if (track == null) return;
-			int ln = 0; // The number of bytes accepted (and perhaps played) by the device
-			int nbrOfChannels = mData.size();
-			int frameSize = mData.get(0).length;
-			float[] r = new float[nbrOfChannels * frameSize];
-			for (int channel = 0; channel < nbrOfChannels; ++channel)
-			{
-				float[] b = mData.get(channel);
-				for (int i = 0; i < frameSize; ++i)
+			try {
+				AudioTrack track = audioTrack;
+				if (track == null) return;
+				int ln = 0; // The number of bytes accepted (and perhaps played) by the device
+				int nbrOfChannels = mData.size();
+				int frameSize = mData.get(0).length;
+				float[] r = new float[nbrOfChannels * frameSize];
+				for (int channel = 0; channel < nbrOfChannels; ++channel)
 				{
-					r[ i * nbrOfChannels + channel] = b[i];
+					float[] b = mData.get(channel);
+					for (int i = 0; i < frameSize; ++i)
+					{
+						r[ i * nbrOfChannels + channel] = b[i];
+					}
 				}
+				ln = track.write(r, 0, r.length, AudioTrack.WRITE_BLOCKING);
+				mSession.needSomeFood(1);
+			} catch (Exception e) {
+				mSession.logError("FeedFloat32Thread exception: " + e.getMessage());
 			}
-			ln = track.write(r, 0, r.length, AudioTrack.WRITE_BLOCKING);
-			mSession.needSomeFood(1);
 		}
 	}
 
