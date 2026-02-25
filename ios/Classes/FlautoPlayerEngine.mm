@@ -338,6 +338,7 @@
         #define NB_BUFFERS 4
         - (int) feed: (NSArray*)data interleaved: (bool)interleaved
         {
+            @autoreleasepool {
                 //NSMutableArray* data = [[NSMutableArray alloc] init];
                 //NSData* d = data[0];
                 //assert (audioData.count > 0); // Something wrong
@@ -423,8 +424,10 @@
                         [playerNode scheduleBuffer: thePCMOutputBuffer  completionHandler:
                         ^(void)
                         {
+                            @autoreleasepool {
                                 dispatch_async(dispatch_get_main_queue(),
                                 ^{
+                                    @autoreleasepool {
                                         --ready; // The Device has sent its packet. One less to send.
                                         assert(ready < NB_BUFFERS || !interleaved);
                                         if (self ->waitingBlock != nil)
@@ -441,7 +444,9 @@
                                                 [self ->flutterSoundPlayer  audioPlayerDidFinishPlaying: true];
 
                                         }
+                                    }
                                 });
+                            }
 
                         }];
                         return ln;
@@ -453,6 +458,7 @@
                         waitingBlock = data;
                         return 0;
                 }
+            }
          }
 
 

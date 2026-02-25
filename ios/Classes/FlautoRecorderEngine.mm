@@ -83,7 +83,11 @@
          {
              @autoreleasepool {
                          inputStatus = AVAudioConverterInputStatus_HaveData ;
-                         AVAudioPCMBuffer* convertedBuffer = [[AVAudioPCMBuffer alloc]initWithPCMFormat: recordingFormat frameCapacity: [buffer frameCapacity]];
+                         
+                         double ratio = recordingFormat.sampleRate / inputFormat.sampleRate;
+                         AVAudioFrameCount requiredCapacity = (AVAudioFrameCount)((double)[buffer frameCapacity] * ratio) + 1024;
+                         
+                         AVAudioPCMBuffer* convertedBuffer = [[AVAudioPCMBuffer alloc]initWithPCMFormat: recordingFormat frameCapacity: requiredCapacity];
                                                   
                          AVAudioConverterInputBlock inputBlock =
                          ^AVAudioBuffer*(AVAudioPacketCount inNumberOfPackets, AVAudioConverterInputStatus *outStatus)
@@ -128,11 +132,13 @@
                                      {
                                          dispatch_async(dispatch_get_main_queue(),
                                         ^{
-                                             if (flautoRecorder == nil || status == 0) // something bad in the recorder : skip the callback
-                                             {
-                                                 return;
-                                             }
-                                             [flautoRecorder  recordingData: data];
+                                            @autoreleasepool {
+                                                 if (flautoRecorder == nil || status == 0) // something bad in the recorder : skip the callback
+                                                 {
+                                                     return;
+                                                 }
+                                                 [flautoRecorder  recordingData: data];
+                                            }
                                          });
                                      }
                                      
@@ -162,18 +168,20 @@
                                      }
                                      dispatch_async(dispatch_get_main_queue(),
                                     ^{
-                                         if (flautoRecorder == nil || getStatus() == 0) // something bad
-                                         {
-                                             return;
-                                         }
-                                         if (coder == pcmFloat32)
-                                         {
-                                             [flautoRecorder  recordingDataFloat32: recdata];
-                                         } else
-                                         if (coder == pcm16)
-                                         {
-                                             [flautoRecorder  recordingDataInt16: recdata];
-                                         }
+                                        @autoreleasepool {
+                                             if (flautoRecorder == nil || getStatus() == 0) // something bad
+                                             {
+                                                 return;
+                                             }
+                                             if (coder == pcmFloat32)
+                                             {
+                                                 [flautoRecorder  recordingDataFloat32: recdata];
+                                             } else
+                                             if (coder == pcm16)
+                                             {
+                                                 [flautoRecorder  recordingDataInt16: recdata];
+                                             }
+                                        }
                                      });
                               } // Not interleaved
                          } // (frameLength > 0)
