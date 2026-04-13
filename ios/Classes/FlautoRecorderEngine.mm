@@ -47,13 +47,27 @@
         
    
         
+        // On macOS Catalyst (iOS app on Mac / "Made for iPad" mode), the AVAudioEngine's
+        // inputNode reports 0 channels unless the AVAudioSession is explicitly activated
+        // at the native level before we query the format. Without this, the tap produces
+        // silence / zero-byte callbacks even though bytes appear to flow at the Dart level.
+        NSError* sessionError = nil;
+        [[AVAudioSession sharedInstance] setCategory: AVAudioSessionCategoryPlayAndRecord
+                                         withOptions: AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetooth
+                                               error: &sessionError];
+        if (sessionError) {
+            NSLog(@"[FlautoRecorderEngine] AVAudioSession setCategory error: %@", sessionError);
+        }
+        [[AVAudioSession sharedInstance] setActive: YES error: &sessionError];
+        if (sessionError) {
+            NSLog(@"[FlautoRecorderEngine] AVAudioSession setActive error: %@", sessionError);
+        }
+
         AVAudioInputNode* inputNode = [engine inputNode];
         AVAudioFormat* inputFormat = [inputNode outputFormatForBus: 0];
+        NSLog(@"[FlautoRecorderEngine] inputNode format: ch=%u sr=%.0f", (unsigned)[inputFormat channelCount], [inputFormat sampleRate]);
         int outputChannelCount = [audioSettings [AVNumberOfChannelsKey]  intValue];
         NSNumber* sampleRate = audioSettings [AVSampleRateKey];
-        //int inputChannelCount = [inputFormat channelCount];
-        //int inputSampleRrate = [inputFormat sampleRate];
-        //AVAudioCommonFormat cf = [inputFormat commonFormat];
         bool interleaved = ![audioSettings [AVLinearPCMIsNonInterleaved] boolValue];
 
         NSFileManager* fileManager = [NSFileManager defaultManager];
@@ -404,3 +418,180 @@ int avAudioRec::getStatus()
 }
 
 
+
+//-----------------------------------------------------------------------------------------------------------------------------------------
+// AudioQueuePCMRecorder
+// Uses AudioQueueNewInput with raw PCM-16 -- the same HAL path as AVAudioRecorder --
+// which works on macOS Catalyst where AVAudioEngine.inputNode tap produces silence.
+// Raw PCM bytes are delivered to FlautoRecorder via recordingData: stream callback.
+//-----------------------------------------------------------------------------------------------------------------------------------------
+
+static const int kNumBuffers = 3;
+static const int kBufferSizeBytes = 3200; // ~100ms at 16kHz mono PCM16
+
+void AudioQueuePCMRecorder::AudioQueueCallback(
+        void* userdata,
+        AudioQueueRef queue,
+        AudioQueueBufferRef buffer,
+        const AudioTimeStamp* startTime,
+        UInt32 numPackets,
+        const AudioStreamPacketDescription* packetDesc)
+{
+    AudioQueuePCMRecorder* self = (AudioQueuePCMRecorder*)userdata;
+    if (self->status != 2) {
+        AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
+        return;
+    }
+
+    NSUInteger byteCount = buffer->mAudioDataByteSize;
+    if (byteCount > 0) {
+        int16_t* samples = (int16_t*)buffer->mAudioData;
+        int sampleCount = (int)(byteCount / 2);
+        self->computePeakLevelForInt16Blk(samples, sampleCount);
+
+        NSData* data = [NSData dataWithBytes:buffer->mAudioData length:byteCount];
+        if (self->fileHandle != nil) {
+            [self->fileHandle writeData:data];
+        } else {
+            FlautoRecorder* recorder = self->flautoRecorder;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                @autoreleasepool {
+                    if (recorder == nil || self->status != 2) return;
+                    [recorder recordingData:data];
+                }
+            });
+        }
+    }
+    AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
+}
+
+void AudioQueuePCMRecorder::computePeakLevelForInt16Blk(int16_t* pt, int ln)
+{
+    for (int i = 0; i < ln; ++pt, ++i) {
+        int cur = abs(*pt);
+        if (cur > maxAmplitude) maxAmplitude = cur;
+    }
+    ++nbrSamples;
+}
+
+AudioQueuePCMRecorder::AudioQueuePCMRecorder(NSString* path, double sr, int ch, FlautoRecorder* owner)
+{
+    flautoRecorder = owner;
+    sampleRate = sr;
+    numChannels = ch;
+    audioQueue = nil;
+    dateCumul = 0;
+    previousTS = 0;
+    status = 0;
+
+    if (path != nil && path != (id)[NSNull null]) {
+        [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
+        fileHandle = [NSFileHandle fileHandleForWritingAtPath:path];
+    } else {
+        fileHandle = nil;
+    }
+
+    AudioStreamBasicDescription fmt;
+    memset(&fmt, 0, sizeof(fmt));
+    fmt.mFormatID         = kAudioFormatLinearPCM;
+    fmt.mFormatFlags      = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    fmt.mSampleRate       = sr;
+    fmt.mChannelsPerFrame = (UInt32)ch;
+    fmt.mBitsPerChannel   = 16;
+    fmt.mBytesPerFrame    = (UInt32)(2 * ch);
+    fmt.mFramesPerPacket  = 1;
+    fmt.mBytesPerPacket   = fmt.mBytesPerFrame;
+
+    OSStatus err = AudioQueueNewInput(&fmt, AudioQueueCallback, this, nil, nil, 0, &audioQueue);
+    if (err != noErr) {
+        NSLog(@"[AudioQueuePCMRecorder] AudioQueueNewInput failed: %d", (int)err);
+        audioQueue = nil;
+        return;
+    }
+    NSLog(@"[AudioQueuePCMRecorder] Created AudioQueue PCM16 %.0fHz %dch", sr, ch);
+
+    for (int i = 0; i < kNumBuffers; i++) {
+        AudioQueueBufferRef buf;
+        AudioQueueAllocateBuffer(audioQueue, kBufferSizeBytes, &buf);
+        AudioQueueEnqueueBuffer(audioQueue, buf, 0, NULL);
+    }
+}
+
+AudioQueuePCMRecorder::~AudioQueuePCMRecorder()
+{
+    if (audioQueue != nil) {
+        AudioQueueDispose(audioQueue, true);
+        audioQueue = nil;
+    }
+    [fileHandle closeFile];
+}
+
+int AudioQueuePCMRecorder::startRecorder()
+{
+    if (audioQueue == nil) return 0;
+    OSStatus err = AudioQueueStart(audioQueue, nil);
+    if (err != noErr) {
+        NSLog(@"[AudioQueuePCMRecorder] AudioQueueStart failed: %d", (int)err);
+        return 0;
+    }
+    previousTS = (long)(CACurrentMediaTime() * 1000);
+    status = 2;
+    NSLog(@"[AudioQueuePCMRecorder] Recording started OK");
+    return status;
+}
+
+void AudioQueuePCMRecorder::stopRecorder()
+{
+    if (audioQueue != nil) AudioQueueStop(audioQueue, true);
+    [fileHandle closeFile];
+    if (previousTS != 0) {
+        dateCumul += (long)(CACurrentMediaTime() * 1000) - previousTS;
+        previousTS = 0;
+    }
+    status = 0;
+    NSLog(@"[AudioQueuePCMRecorder] Recording stopped");
+}
+
+void AudioQueuePCMRecorder::resumeRecorder()
+{
+    if (audioQueue == nil) return;
+    AudioQueueStart(audioQueue, nil);
+    previousTS = (long)(CACurrentMediaTime() * 1000);
+    status = 2;
+}
+
+void AudioQueuePCMRecorder::pauseRecorder()
+{
+    if (audioQueue == nil) return;
+    AudioQueuePause(audioQueue);
+    if (previousTS != 0) {
+        dateCumul += (long)(CACurrentMediaTime() * 1000) - previousTS;
+        previousTS = 0;
+    }
+    status = 1;
+}
+
+NSNumber* AudioQueuePCMRecorder::recorderProgress()
+{
+    long r = dateCumul;
+    if (previousTS != 0) r += (long)(CACurrentMediaTime() * 1000) - previousTS;
+    return [NSNumber numberWithLong:r];
+}
+
+NSNumber* AudioQueuePCMRecorder::dbPeakProgress()
+{
+    if (nbrSamples > 0) {
+        previousAmplitude = maxAmplitude;
+        maxAmplitude = 0;
+        nbrSamples = 0;
+    }
+    double max = previousAmplitude;
+    if (max == 0.0) return [NSNumber numberWithDouble:0.0];
+    double db = 20.0 * log10((max / 51805.5336) / 0.0002);
+    return [NSNumber numberWithDouble:db];
+}
+
+int AudioQueuePCMRecorder::getStatus()
+{
+    return status;
+}

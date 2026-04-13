@@ -31,7 +31,7 @@ It has been extracted to be isolated from Flutter and can be used with other fra
   s.ios.deployment_target = '12.0'
 
   s.source_files = 'ios/Classes/*'
-  s.frameworks = 'AVFoundation', 'MediaPlayer'
+  s.frameworks = 'AVFoundation', 'MediaPlayer', 'AudioToolbox'
 
 
 end

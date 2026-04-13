@@ -274,9 +274,17 @@ AudioRecInterface* audioRec;
 
         if(codec == pcm16 || codec == pcmFloat32)
         {
+            // Use AudioQueuePCMRecorder instead of AudioRecorderEngine (AVAudioEngine+tap).
+            // AVAudioEngine.inputNode.installTapOnBus produces silence on macOS Catalyst
+            // ("Made for iPad" mode) — AudioQueueNewInput with PCM16 uses the same HAL
+            // path as AVAudioRecorder and works correctly on both iOS and macOS Catalyst.
             try
             {
-                audioRec = new AudioRecorderEngine(codec, path, audioSettings, bufferSize, enableVoiceProcessing, self );
+                long rate = [[audioSettings objectForKey: AVSampleRateKey] longValue];
+                int ch    = [[audioSettings objectForKey: AVNumberOfChannelsKey] intValue];
+                if (rate <= 0) rate = 16000;
+                if (ch   <= 0) ch   = 1;
+                audioRec = new AudioQueuePCMRecorder(path, (double)rate, ch, self);
             } catch ( NSException* e)
             {
                 return false;

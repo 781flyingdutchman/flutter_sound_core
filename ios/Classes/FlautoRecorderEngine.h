@@ -103,5 +103,44 @@ public:
 
 };
 
+#include <AudioToolbox/AudioToolbox.h>
+
+/// A PCM stream recorder built directly on AudioQueueNewInput.
+/// Unlike AudioRecorderEngine (AVAudioEngine+installTapOnBus), this uses the
+/// same low-level AudioQueue path as AVAudioRecorder, which works correctly
+/// on macOS Catalyst ("Made for iPad" / Mac mode).
+/// Raw PCM-16 bytes are delivered to the FlautoRecorder stream callback.
+class AudioQueuePCMRecorder : public AudioRecInterface
+{
+private:
+    AudioQueueRef audioQueue;
+    NSMutableArray<NSValue*>* buffers;
+    long dateCumul;
+    long previousTS;
+    int status;
+    double sampleRate;
+    int numChannels;
+    NSFileHandle* fileHandle; // non-nil when saving to file
+    
+    static void AudioQueueCallback(void* userdata,
+                                   AudioQueueRef queue,
+                                   AudioQueueBufferRef buffer,
+                                   const AudioTimeStamp* startTime,
+                                   UInt32 numPackets,
+                                   const AudioStreamPacketDescription* packetDesc);
+    void computePeakLevelForInt16Blk(int16_t* pt, int ln);
+    
+public:
+    /* ctor */ AudioQueuePCMRecorder(NSString* path, double sampleRate, int numChannels, FlautoRecorder* owner);
+    /* dtor */ virtual ~AudioQueuePCMRecorder();
+    virtual int startRecorder();
+    virtual void stopRecorder();
+    virtual void resumeRecorder();
+    virtual void pauseRecorder();
+    virtual NSNumber* recorderProgress();
+    virtual NSNumber* dbPeakProgress();
+    virtual int getStatus();
+};
+
 #endif // #ifdef __cplusplus
 #endif /* FlautoRecorderEngine_h */
